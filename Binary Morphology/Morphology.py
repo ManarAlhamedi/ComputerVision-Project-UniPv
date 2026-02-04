@@ -10,11 +10,10 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-from typing import Literal, Tuple, List, Dict, Callable, Optional
 import numpy as np
 from PIL import Image
-import os
 from pathlib import Path
+from typing import Literal, Dict, Callable, List, Tuple, Optional
 
 
 KernelShape = Literal["square", "cross", "disk"]
@@ -363,9 +362,23 @@ def save_binary_image(path: str, binary: np.ndarray) -> None:
     Image.fromarray(out, mode="L").save(path)
 
 
+# def parse_args() -> argparse.Namespace:
+#     p = argparse.ArgumentParser(description="Binary morphology (erosion/dilation) from scratch.")
+#     p.add_argument("--op", choices=["erode", "dilate"], required=True, help="Operation to apply.")
+#     p.add_argument("--in", dest="inp", required=True, help="Input image path.")
+#     p.add_argument("--out", dest="out", required=True, help="Output image path.")
+#     p.add_argument("--threshold", type=int, default=128, help="Binarization threshold for grayscale input.")
+#     p.add_argument("--invert", action="store_true", help="Invert binary image after thresholding.")
+#     p.add_argument("--ksize", type=int, default=3, help="Odd kernel size (3,5,7).")
+#     p.add_argument("--shape", choices=["square", "cross", "disk"], default="square", help="Structuring element shape.")
+#     p.add_argument("--iters", type=int, default=1, help="Number of iterations.")
+#     p.add_argument("--pad", choices=["constant", "edge"], default="constant", help="Padding mode.")
+#     p.add_argument("--pad-value", type=int, default=0, help="Constant padding value (0 or 1), used when pad=constant.")
+#     return p.parse_args()
+
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Binary morphology (erosion/dilation) from scratch.")
-    p.add_argument("--op", choices=["erode", "dilate"], required=True, help="Operation to apply.")
+    p = argparse.ArgumentParser(description="Binary morphology (erosion/dilation/opening/closing) from scratch.")
+    p.add_argument("--op", choices=["erode", "dilate", "open", "close"], required=True, help="Operation to apply.")
     p.add_argument("--in", dest="inp", required=True, help="Input image path.")
     p.add_argument("--out", dest="out", required=True, help="Output image path.")
     p.add_argument("--threshold", type=int, default=128, help="Binarization threshold for grayscale input.")
@@ -379,7 +392,6 @@ def parse_args() -> argparse.Namespace:
 
 
 
-
 def _ensure_dir(path: str | Path) -> None:
     Path(path).mkdir(parents=True, exist_ok=True)
 
@@ -388,8 +400,32 @@ def _binarize(gray: np.ndarray, threshold: int, invert: bool) -> np.ndarray:
     binary = (gray >= threshold)
     return (~binary) if invert else binary
 
+def run_cli(args: argparse.Namespace) -> None:
+    gray = load_image_as_gray(args.inp)
+    binary = _binarize(gray, threshold=args.threshold, invert=args.invert)
 
-def main() -> None:
+    se = make_structuring_element(args.ksize, args.shape)
+
+    ops: Dict[str, Callable[..., np.ndarray]] = {
+        "erode": binary_erosion,
+        "dilate": binary_dilation,
+        "open": binary_opening,
+        "close": binary_closing,
+    }
+
+    out = ops[args.op](
+        binary,
+        se,
+        iterations=args.iters,
+        pad_mode=args.pad,
+        pad_value=args.pad_value,
+    )
+
+    save_binary_image(args.out, out)
+    print(f"Saved: {Path(args.out).resolve()}")
+
+
+def run_batch_grid() -> None:
     """
     Test binary morphology.
 
@@ -411,22 +447,21 @@ def main() -> None:
     3) Check outputs in:      ./report_outputs/
     """
     # --------- user-editable settings ----------
-    input_dir = Path("test_images1")
-    output_dir = Path("report_outputs1")
+    input_dir = Path("test_images")
+    output_dir = Path("report_outputs")
     threshold = 128     # adjust per image if needed
     invert = False      # set True if your foreground is dark instead of bright
 
     # Grid of cases to run
-    ksizes = [3, 5, 7]
-    shapes = ["square", "cross", "disk"]  
-    iterations_list = [1, 2, 3]
+    ksizes = [3, 7]
+    shapes = ["square", "cross"]  
+    iterations_list = [1, 3]
 
     # Padding cases:
     # - constant with pad_value 0 is common (assume background outside image)
     # - edge can reduce border artifacts for some images
     pad_cases: List[Tuple[str, int]] = [
         ("constant", 0),
-        ("edge", 0),
         # You *can* test ("constant", 1) too, but it often produces strong border effects.
         # ("constant", 1),
     ]
@@ -487,8 +522,6 @@ def main() -> None:
                                 f"__{op_name.upper()}"
                                 f"__k{k}_{shape}"
                                 f"__it{iters}"
-                                f"__pad{pad_mode}_pv{pad_value}"
-                                f"__thr{threshold}_inv{int(invert)}"
                                 f".png"
                             )
                             save_binary_image(str(output_dir / fname), out)
@@ -496,5 +529,15 @@ def main() -> None:
     print(f"Done. Results saved to: {output_dir.resolve()}")
 
 
+
+
+# if __name__ == "__main__":
+#     run_batch_grid()
+
+
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    run_cli(args)
+
+# Example usage:
+# python morphology.py --op erode --in input.png --out out.png --ksize 5 --shape square --iters 2
